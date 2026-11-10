@@ -5,6 +5,10 @@ Versioning follows [Semantic Versioning](https://semver.org). Releases are cut b
 pushing a `v*` tag, which triggers the desktop installer build and publishes a
 GitHub Release with Windows, macOS and Linux artifacts.
 
+## [Unreleased]
+
+- NEW: **picture-in-picture for the live output.** In the screen menu, "Picture-in-picture" floats a small always-on-top window showing exactly what is on air, so you can watch the output while you work in another app or tab. Close it from its own title bar or the Close button. Available in Chrome and Edge 116+; the item is hidden in browsers that cannot do it.
+
 ## [1.28.0] — 2026-11-08
 
 - SECURITY: **on the hosted app, the Deepgram key and the phone-remote PIN are now private to each browser.** The hosted app keeps one settings record for everyone, and it had been returning the saved Deepgram API key and the remote PIN to anyone who opened its settings address (and the speech setup address handed out the key as well). Now: each browser enters its own Deepgram key, kept in that browser only and never sent to Vifug's server; the settings record never holds a key or a PIN and never returns one (anything an earlier version left in it is removed the first time it is read); and the phone remote uses a six-digit pairing code that each browser makes for itself (Settings → Streaming & output → Phone pairing code). The server learns only a hash of the code, and a phone's commands are delivered to the browser it is paired with and to no other, so people using the site at the same time cannot control each other's screens. Desktop installs are unchanged: they keep the key and PIN in their own settings. **If your Deepgram key was ever saved on app.vifug.com, treat it as public and replace it in the Deepgram console.**
