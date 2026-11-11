@@ -7,6 +7,8 @@ GitHub Release with Windows, macOS and Linux artifacts.
 
 ## [Unreleased]
 
+- FIX: **the Clean card side-by-side layout collapsed to a thin strip at the top of the screen.** It now fills the screen as intended. The verse also no longer runs into the reference under it, "Video left" and "Video right" were the wrong way round in this layout and are corrected (the camera starts on the right), and the footer and reference text scale with the picture so they are the right size in the small Preview and Live pictures.
+- FIX: the screen menu is wider, so "Picture-in-picture" and "Open on another monitor…" are no longer cut off.
 - NEW: **slide thumbnails with a coloured label bar and a size slider.** Each slide in the grid now carries a bar along the bottom with its number and section (Verse 1, Chorus), in the section's colour; the bar turns red on the live slide and green on the cued one. The words scale with the card, and a Slide size slider above the grid makes the cards bigger or smaller and is remembered on that device.
 - NEW: **a status bar along the bottom.** One line showing what is on air (song, section and slide count), whether the output is open and on which screen, the recording time, auto-follow, the theme and the clock. Hidden on phones.
 - CHANGED: **Preview and Live have title bars.** Each picture has a coloured header attached to it; the Live one turns solid red while something is on air.
