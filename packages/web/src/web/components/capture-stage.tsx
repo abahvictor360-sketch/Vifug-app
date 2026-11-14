@@ -9,6 +9,32 @@ import { useAudioOutputMuted } from "../hooks/use-audio-output";
 function Nameplate({ nameplate, scale }: { nameplate: NonNullable<LiveCapture>["nameplate"]; scale?: boolean }) {
   const logo = useMediaUrl(nameplate?.logo);
   if (!nameplate?.name) return null;
+  // A lower third designed in the theme designer: the name is the slide's
+  // text and the title its smaller second line, drawn by the same renderer
+  // as every other slide, so the bar, font, position and motion are the
+  // theme's own.
+  if (nameplate.theme) {
+    return (
+      <div style={{ position: "absolute", inset: 0, containerType: "size", pointerEvents: "none" }}>
+        <SlideRender
+          state={{
+            status: "live",
+            sourceLines: [nameplate.name],
+            translationLines: nameplate.title ? [nameplate.title] : [],
+            sectionLabel: "",
+            songTitle: "",
+            slideId: `nameplate-${nameplate.name}`,
+            slideIndex: 0,
+            slideCount: 1,
+            theme: { ...nameplate.theme, background: null, showCaption: false },
+            rev: 0,
+          }}
+          transparent
+          scale
+        />
+      </div>
+    );
+  }
   const unit = scale ? "cqw" : "vw";
   // In a small preview box the usual minimum text size is far too big for the
   // box, so the card would overflow it; the minimums shrink with the box there.
@@ -228,8 +254,9 @@ export function CaptureStage({
 
   // pip - split the frame. Video keeps its aspect (object-contain) so a
   // portrait camera feed isn't stretched to fill a landscape half.
-  const videoWidth = Math.min(0.8, Math.max(0.2, capture.pipVideoWidth ?? 0.5));
-  const videoFirst = (capture.pipVideoSide ?? "left") === "left";
+  const videoWidth = Math.min(0.8, Math.max(0.2, capture.pipVideoWidth ?? (capture.pipClean && !capture.pipBroadcast ? 0.4 : 0.5)));
+  // Clean card puts the words first by default, as its reference design does.
+  const videoFirst = (capture.pipVideoSide ?? (capture.pipClean && !capture.pipBroadcast ? "right" : "left")) === "left";
   const videoPct = `${videoWidth * 100}%`;
   const textPct = `${(1 - videoWidth) * 100}%`;
 
@@ -279,6 +306,87 @@ export function CaptureStage({
           </div>
         </div>
         {capture.pipBottomText ? bar(capture.pipBottomText, false) : <div style={{ height: "3%", background: accent, flex: "none" }} />}
+        {nameplate}
+      </div>
+    );
+  }
+
+  if (capture.pipClean && !capture.pipBroadcast) {
+    const reference =
+      state.songTitle && state.sectionLabel && !state.sectionLabel.includes(state.songTitle)
+        ? `${state.sectionLabel} (${state.songTitle})`
+        : state.sectionLabel;
+    const refTop = capture.pipRefPos === "top";
+    return (
+      <div style={{ position: "absolute", inset: 0, containerType: "size", display: "flex", flexDirection: "column", background: "#0b0b0d" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: videoFirst ? "row-reverse" : "row",
+            gap: "3%",
+            padding: "4% 4% 2%",
+          }}
+        >
+          <div style={{ width: textPct, position: "relative", containerType: "size" }}>
+            {/* The verse gets the pane above the reference line, so a long
+                passage shrinks to fit rather than running into it. */}
+            <div style={{ position: "absolute", inset: !reference ? 0 : refTop ? "16% 0 0 0" : "0 0 16% 0", containerType: "size" }}>
+              <SlideRender
+                state={{ ...state, theme: { ...state.theme, textAlign: "left", textFrame: null, displayMode: "fullscreen", verticalPos: "center", showCaption: false, safeMargin: 2 } }}
+                transparent
+                scale
+                playAudio={playAudio}
+              />
+            </div>
+            {reference && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: "2%",
+                  right: "2%",
+                  textAlign: capture.pipRefAlign ?? "left",
+                  ...(refTop ? { top: "3%" } : { bottom: "3%" }),
+                  color: "#fff",
+                  fontWeight: 700,
+                  fontSize: "4.4cqw",
+                  fontFamily: 'var(--font-lyric), system-ui, sans-serif',
+                }}
+              >
+                {reference}
+              </div>
+            )}
+          </div>
+          <div
+            style={{
+              width: videoPct,
+              position: "relative",
+              alignSelf: "center",
+              height: "100%",
+              background: "#000",
+              borderRadius: "0.5em",
+              overflow: "hidden",
+            }}
+          >
+            <ShapedVideo capture={capture} av={av} />
+          </div>
+        </div>
+        <div
+          style={{
+            height: "7%",
+            flex: "none",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "rgba(255,255,255,0.85)",
+            fontStyle: "italic",
+            fontSize: "1.5cqw",
+            letterSpacing: "0.03em",
+          }}
+        >
+          {capture.pipBottomText}
+        </div>
         {nameplate}
       </div>
     );

@@ -4,7 +4,7 @@ import {
   Search, Plus, Upload, Music4, Pencil, Trash2, Monitor, MonitorX,
   ChevronLeft, ChevronRight, Square, Ban, Settings2, Repeat, X, Clapperboard,
   Image as ImageIcon, Radio, Languages, Ear, Check, Film, Palette, Link2, Loader2, Rocket,
-  BookOpen, SendHorizontal, Eye, Maximize,
+  BookOpen, SendHorizontal, Eye, Maximize, PictureInPicture2,
   ListChecks, ArrowUp, ArrowDown, CalendarDays, PlayCircle, GripVertical, History,
   Mic, MicOff, HelpCircle, Mail, Download, MonitorPlay, Volume2, VolumeX, SlidersHorizontal, Circle,
   Timer as TimerIcon,
@@ -15,7 +15,9 @@ import { VButton, SectionChip, Spinner, VuMeter, dbLabel } from "../components/b
 import { PresentationsPanel } from "../components/presentation-panel";
 import { SlideRender } from "../components/slide-render";
 import { usePublishAudioOutput } from "../hooks/use-audio-output";
+import { createPortal } from "react-dom";
 import { LiveOutput } from "../components/live-output";
+import { usePictureInPicture } from "../hooks/use-pip";
 import { SongEditor } from "../components/song-editor";
 import { ImportModal } from "../components/import-modal";
 import { BiblePanel } from "../components/bible-panel";
@@ -35,6 +37,9 @@ import { TimerOverlay } from "../components/timer-overlay";
 import { useLiveController } from "../hooks/use-live-controller";
 import { useStage, type StageController } from "../hooks/use-stage";
 import { useLiveState } from "../hooks/use-live";
+import { chipClass } from "../lib/sections";
+import { useStreamer, useStreamConfig } from "../hooks/use-streamer";
+import { readyDestinations } from "../lib/stream-destinations";
 import { useDesktop } from "../hooks/use-desktop";
 import { useUpdateCheck, DOWNLOAD_PAGE } from "../hooks/use-update-check";
 import { UpdateDialog } from "../components/update-dialog";
@@ -438,6 +443,7 @@ export default function OperatorPage() {
    * tablet, or a laptop plugged into the projector with no second display.
    */
   const [fullScreenOutput, setFullScreenOutput] = useState(false);
+  const pip = usePictureInPicture();
   const updateMedia = useUpdateMedia();
 
   const songs = useSongList(search);
@@ -494,6 +500,20 @@ export default function OperatorPage() {
       setOrder(ids);
     }
   }, [full.data]);
+
+  // A Bible or presentation theme of its own: that saved theme's look and its
+  // own background picture. No id (or an id that no longer exists) follows the
+  // lyric theme, so nothing changes for anyone who never picks one.
+  const ownThemeBase = useCallback(
+    (id: string | null | undefined, fallback: LiveTheme): LiveTheme => {
+      const t = id ? themes.data?.find((x) => x.id === id) : undefined;
+      if (!t) return fallback;
+      const bgId = (t as { backgroundId?: string | null }).backgroundId;
+      const own = bgId ? mediaToBackground(media.data?.find((x) => x.id === bgId)) : null;
+      return { ...themeToLive(t as Record<string, unknown>), background: own ?? fallback.background };
+    },
+    [themes.data, media.data],
+  );
 
   // Resolve the active background media into a LiveBackground for the theme.
   const activeBackground = useMemo<LiveBackground>(() => {
@@ -608,13 +628,14 @@ export default function OperatorPage() {
 
   // Bible theme = active lyric theme with per-display Bible overrides merged in.
   // Bible slides always show the scripture reference caption on the output.
+  const bibleBase = useMemo(() => ownThemeBase(settings?.bibleThemeId, activeTheme), [ownThemeBase, settings?.bibleThemeId, activeTheme]);
   const bibleTheme = useMemo<LiveTheme>(
     () => ({
-      ...tightenMargin(mergeOverride(activeTheme, settings?.bibleTheme), settings?.bibleTheme),
+      ...tightenMargin(mergeOverride(bibleBase, settings?.bibleTheme), settings?.bibleTheme),
       ...(settings?.bibleBackgroundId !== undefined ? { background: bibleBackground } : {}),
       showCaption: true,
     }),
-    [activeTheme, settings?.bibleTheme, settings?.bibleBackgroundId, bibleBackground],
+    [bibleBase, settings?.bibleTheme, settings?.bibleBackgroundId, bibleBackground],
   );
 
   // Presentation background: same three states as the Bible's (see above).
@@ -642,16 +663,17 @@ export default function OperatorPage() {
    * below gives it the room to use, so letting it fill is what matches what
    * the operator sees in the preview.
    */
+  const presentationBase = useMemo(() => ownThemeBase(settings?.presentationThemeId, activeTheme), [ownThemeBase, settings?.presentationThemeId, activeTheme]);
   const presentationTheme = useMemo<LiveTheme>(
     () => ({
-      ...tightenMargin(mergeOverride(activeTheme, settings?.presentationTheme), settings?.presentationTheme),
+      ...tightenMargin(mergeOverride(presentationBase, settings?.presentationTheme), settings?.presentationTheme),
       // Decks get a background of their own, the same three states as the
       // Bible's: unset inherits the lyric background, null is deliberately
       // plain, an id is that picture or video. A slide carrying its own
       // background still wins over it (see lib/stage.ts).
       ...(settings?.presentationBackgroundId !== undefined ? { background: presentationBackground } : {}),
     }),
-    [activeTheme, settings?.presentationTheme, settings?.presentationBackgroundId, presentationBackground],
+    [presentationBase, settings?.presentationTheme, settings?.presentationBackgroundId, presentationBackground],
   );
 
   const stageSlides =
@@ -1020,6 +1042,9 @@ export default function OperatorPage() {
   // shortcut always calls the current toggle without re-registering the
   // listener every tick of the elapsed-time counter.
   const recorder = useRecorder();
+  const streamer = useStreamer(settings?.audio?.inputDeviceId ?? null, settings?.online?.mode === "lower_third");
+  const streamConfig = useStreamConfig();
+  const streamTargets = readyDestinations(streamConfig).length;
   const recorderRef = useRef(recorder);
   recorderRef.current = recorder;
 
@@ -1316,7 +1341,14 @@ export default function OperatorPage() {
               </div>
             )}
             {!songs.isError && songs.data?.length === 0 && (
-              <p className="px-2 py-8 text-center text-sm text-[var(--v-text-faint)]">No songs found.</p>
+              <div className="px-3 py-8 text-center">
+                <p className="text-sm text-[var(--v-text-dim)]">
+                  {search.trim() ? `No songs match "${search.trim()}".` : "Your library is empty."}
+                </p>
+                <p className="mt-1 text-[12px] text-[var(--v-text-faint)]">
+                  {search.trim() ? "Try fewer words, or part of the first line." : "Use New to type a song in, or Import to bring songs over."}
+                </p>
+              </div>
             )}
             <ul className="space-y-0.5">
               {songs.data?.map((s) => (
@@ -1437,14 +1469,16 @@ export default function OperatorPage() {
             <div className="grid grid-cols-2 gap-3">
               {/* PREVIEW (cue next) */}
               <div className="flex flex-col">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-[var(--v-accent)]">
+                <div className="flex h-7 items-center justify-between rounded-t-lg border-2 border-b-0 border-[var(--v-accent)]/50 bg-[var(--v-accent-soft)] px-2">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--v-accent)]">
                     <Eye className="h-3.5 w-3.5" /> Preview
                   </span>
-                  <span className="text-[11px] text-[var(--v-text-faint)]">{mode === "bible" ? "Scripture" : "Lyrics"}</span>
+                  <span className="text-[11px] text-[var(--v-text-faint)]">
+                    {mode === "bible" ? "Scripture" : mode === "presentation" ? "Slides" : mode === "media" ? "Media" : "Lyrics"}
+                  </span>
                 </div>
                 <div
-                  className="relative aspect-video w-full overflow-hidden rounded-lg border-2 border-[var(--v-accent)]/50"
+                  className="relative aspect-video w-full overflow-hidden rounded-b-lg border-2 border-[var(--v-accent)]/50"
                   style={{ background: "#000" }}
                   onContextMenu={(e) => { e.preventDefault(); setScreenMenu({ x: e.clientX, y: e.clientY }); }}
                 >
@@ -1473,7 +1507,13 @@ export default function OperatorPage() {
                     backwards, for the one column a congregation can see. It
                     now goes red with a lit dot while something is actually
                     on screen, and stays quiet when nothing is. */}
-                <div className="mb-2 flex items-center justify-between">
+                <div
+                  className={`flex h-7 items-center justify-between rounded-t-lg border-2 border-b-0 px-2 ${
+                    liveState.status === "live"
+                      ? "border-[var(--v-live)] bg-[var(--v-live)] [&_span]:!text-white"
+                      : "border-[var(--v-border)] bg-[var(--v-surface-3)]"
+                  }`}
+                >
                   <span
                     className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${
                       liveState.status === "live" ? "text-[var(--v-live)]" : "text-[var(--v-text-faint)]"
@@ -1500,7 +1540,7 @@ export default function OperatorPage() {
                   {liveState.status !== "live" && <StatusPill status={liveState.status} />}
                 </div>
                 <div
-                  className={`relative aspect-video w-full overflow-hidden rounded-lg border-2 ${
+                  className={`relative aspect-video w-full overflow-hidden rounded-b-lg border-2 ${
                     liveState.status === "live"
                       ? "v-live-pulse border-[var(--v-live)]"
                       : "border-[var(--v-border)]"
@@ -1588,6 +1628,13 @@ export default function OperatorPage() {
                   projector.openProjector(id);
                   setScreenMenu(null);
                 }}
+                pipSupported={pip.supported}
+                pipActive={pip.active}
+                onTogglePip={() => {
+                  // Straight from the click: the API needs a user gesture.
+                  void pip.toggle();
+                  setScreenMenu(null);
+                }}
                 onFullScreenHere={() => {
                   // Requested straight from the click, because the Fullscreen
                   // API only grants it during a user gesture - opening the
@@ -1643,6 +1690,45 @@ export default function OperatorPage() {
                       `Live: ${liveState.capture.name}`
                     : "Nothing live yet"}
             </p>
+
+            {/* Stream the live output to YouTube, Facebook, Twitch or any RTMP
+                server. Same surface the recorder captures, so the two can run
+                together. With nothing set up yet, the button is the way in. */}
+            <div className="mt-2 border-t border-[var(--v-border)] pt-2">
+              <VButton
+                variant={streamer.status === "live" ? "danger" : "subtle"}
+                className="w-full"
+                disabled={streamer.status === "starting"}
+                onClick={() => {
+                  if (streamer.status === "live") return streamer.stop();
+                  if (!streamer.supported || streamTargets === 0) {
+                    setSettingsSection("streaming");
+                    setSettingsOpen(true);
+                    return;
+                  }
+                  void streamer.start();
+                }}
+              >
+                {streamer.status === "live" ? (
+                  <>
+                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-white" /> End stream
+                    <span className="tabular-nums">
+                      {String(Math.floor(streamer.seconds / 60)).padStart(2, "0")}:
+                      {String(streamer.seconds % 60).padStart(2, "0")}
+                    </span>
+                  </>
+                ) : streamer.status === "starting" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Connecting…
+                  </>
+                ) : (
+                  <>
+                    <Radio className="h-4 w-4" /> {streamTargets > 0 ? "Go live to " + (streamTargets === 1 ? "1 platform" : `${streamTargets} platforms`) : "Stream to YouTube, Facebook…"}
+                  </>
+                )}
+              </VButton>
+              {streamer.error && <p className="mt-1 text-[12px] text-amber-500">{streamer.error}</p>}
+            </div>
 
             {/* Record the live output. Sits directly under the live preview
                 because that is the thing being recorded - and what it saves
@@ -1759,6 +1845,19 @@ export default function OperatorPage() {
         </aside>
       </div>
 
+      <StatusBar
+        liveState={liveState}
+        outputOpen={projector.open}
+        outputLabel={projector.targetDisplay?.label ?? null}
+        recording={recorder.status === "recording"}
+        recordSeconds={recorder.seconds}
+        streaming={streamer.status === "live"}
+        streamSeconds={streamer.seconds}
+        streamCount={streamer.count}
+        autoFollow={!!settings?.autoFollow}
+        themeName={themes.data?.find((t) => t.id === settings?.activeThemeId)?.name ?? themes.data?.[0]?.name ?? null}
+      />
+
       {editorOpen && (
         <SongEditor
           song={editorOpen === "edit" ? full.data ?? null : null}
@@ -1851,6 +1950,12 @@ export default function OperatorPage() {
         />
       )}
 
+      {pip.pipWindow &&
+        createPortal(
+          <LiveOutput playAudio={false} hideFullscreen onExit={pip.close} exitLabel="Close" />,
+          pip.pipWindow.document.body,
+        )}
+
       {fullScreenOutput && (
         <LiveOutput
           // The desktop projector window is already the audible surface; two
@@ -1865,6 +1970,86 @@ export default function OperatorPage() {
 }
 
 /* ---------------- Sub-components ---------------- */
+
+/**
+ * One line along the bottom that answers "what is happening right now",
+ * the way OBS's status bar does: what is on air, where the output is going,
+ * whether it is being recorded, and the time. Everything in it is already on
+ * screen somewhere else; this is where to look when there is no time to look.
+ */
+function StatusBar({
+  liveState,
+  outputOpen,
+  outputLabel,
+  recording,
+  recordSeconds,
+  streaming,
+  streamSeconds,
+  streamCount,
+  autoFollow,
+  themeName,
+}: {
+  streaming: boolean;
+  streamSeconds: number;
+  streamCount: number;
+  liveState: LiveState;
+  outputOpen: boolean;
+  outputLabel: string | null;
+  recording: boolean;
+  recordSeconds: number;
+  autoFollow: boolean;
+  themeName: string | null;
+}) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const live = liveState.status === "live";
+  const what = [liveState.songTitle, liveState.sectionLabel].filter(Boolean).join(" - ");
+  const mmss = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+  const cell = "flex shrink-0 items-center gap-1.5 border-l border-[var(--v-border)] px-3";
+  return (
+    <footer
+      aria-label="Status"
+      className="hidden h-7 shrink-0 items-center border-t border-[var(--v-border)] bg-[var(--v-surface-2)] text-[11px] text-[var(--v-text-faint)] md:flex"
+    >
+      <span className={`flex min-w-0 flex-1 items-center gap-1.5 px-3 ${live ? "text-[var(--v-text)]" : ""}`}>
+        <span className={`h-2 w-2 shrink-0 rounded-full ${live ? "bg-[var(--v-live)]" : "bg-[var(--v-text-faint)]/50"}`} />
+        <span className={`shrink-0 font-semibold uppercase tracking-wide ${live ? "text-[var(--v-live)]" : ""}`}>
+          {live ? "On air" : liveState.status === "blank" ? "Blank" : "Idle"}
+        </span>
+        {live && what && <span className="min-w-0 truncate">{what}</span>}
+        {live && liveState.slideCount > 0 && (
+          <span className="shrink-0 tabular-nums">
+            {liveState.slideIndex + 1}/{liveState.slideCount}
+          </span>
+        )}
+      </span>
+      <span className={cell}>
+        <span className={`h-2 w-2 rounded-full ${outputOpen ? "bg-[var(--v-ok)]" : "bg-[var(--v-text-faint)]/50"}`} />
+        {outputOpen ? `Output: ${outputLabel ?? "open"}` : "Output: off"}
+      </span>
+      <span className={`${cell} ${recording ? "text-[var(--v-live)]" : ""}`}>
+        <span className={`h-2 w-2 rounded-full ${recording ? "bg-[var(--v-live)]" : "bg-[var(--v-text-faint)]/50"}`} />
+        <span className="tabular-nums">REC {recording ? mmss(recordSeconds) : "off"}</span>
+      </span>
+      <span className={`${cell} ${streaming ? "text-[var(--v-live)]" : ""}`}>
+        <span className={`h-2 w-2 rounded-full ${streaming ? "animate-pulse bg-[var(--v-live)]" : "bg-[var(--v-text-faint)]/50"}`} />
+        <span className="tabular-nums">
+          STREAM {streaming ? `${mmss(streamSeconds)} · ${streamCount} ${streamCount === 1 ? "platform" : "platforms"}` : "off"}
+        </span>
+      </span>
+      <span className={`${cell} hidden lg:flex`}>Auto-follow: {autoFollow ? "on" : "off"}</span>
+      {themeName && <span className={`${cell} hidden max-w-[220px] xl:flex`}><span className="truncate">Theme: {themeName}</span></span>}
+      <span className={`${cell} tabular-nums text-[var(--v-text-dim)]`}>
+        {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+      </span>
+    </footer>
+  );
+}
+
+
 
 const MODE_TABS: { id: OperatorMode; label: string; icon: typeof Music4 }[] = [
   { id: "lyrics", label: "Lyrics", icon: Music4 },
@@ -1942,7 +2127,7 @@ function TopBar({
        */}
       <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-3">
         <span className="hidden rounded bg-[var(--v-surface-3)] px-1.5 py-0.5 text-[11px] text-[var(--v-text-faint)] xl:inline-block">
-          {desktop ? "Desktop" : "Preview"}
+          {desktop ? "Desktop" : "Browser"}
         </span>
         <UpdateNotice update={update} />
         {/* Browser only. The update pill takes this slot in the desktop app,
@@ -1958,8 +2143,8 @@ function TopBar({
           <StatusPill status={liveStatus} />
         </span>
         <HelpMenu onCheckUpdates={update.checkNow} desktop={desktop} />
-        <VButton variant="ghost" size="sm" onClick={onMedia} aria-label="Media">
-          <Clapperboard className="h-4 w-4" /> <span className="hidden lg:inline">Media</span>
+        <VButton variant="ghost" size="sm" onClick={onMedia} aria-label="Media library" title="Media library - backgrounds, pictures and videos">
+          <Clapperboard className="h-4 w-4" /> <span className="hidden lg:inline">Library</span>
         </VButton>
         <VButton variant="ghost" size="sm" onClick={onSettings} aria-label="Settings">
           <Settings2 className="h-4 w-4" /> <span className="hidden lg:inline">Settings</span>
@@ -2152,6 +2337,9 @@ function ScreenContextMenu({
   obsConfigured,
   onSendToDisplay,
   onFullScreenHere,
+  pipSupported,
+  pipActive,
+  onTogglePip,
   onCloseProjection,
   onSendToObs,
   onCopyStreamUrl,
@@ -2175,6 +2363,10 @@ function ScreenContextMenu({
   obsConfigured: boolean;
   onSendToDisplay: (displayId: number) => void;
   onFullScreenHere: () => void;
+  /** Browser can float the output in a small always-on-top window. */
+  pipSupported: boolean;
+  pipActive: boolean;
+  onTogglePip: () => void;
   onCloseProjection: () => void;
   onSendToObs: () => void;
   onCopyStreamUrl: () => void;
@@ -2268,6 +2460,13 @@ function ScreenContextMenu({
           <Maximize className="h-4 w-4 shrink-0" />,
           "Full screen on this device",
           onFullScreenHere,
+        )}
+      {pipSupported &&
+        item(
+          <PictureInPicture2 className="h-4 w-4 shrink-0" />,
+          pipActive ? "Close picture-in-picture" : "Picture-in-picture",
+          onTogglePip,
+          { active: pipActive, hint: pipActive ? "floating" : "stays on top" },
         )}
       {/* Chrome and Edge can open the output on a monitor of its own, but only
           once the operator has allowed it - and the browser will only ask in
@@ -2445,8 +2644,42 @@ function SlideGrid({
 
   let flatIndex = -1;
 
+  // Thumbnail size, remembered on this device. A big hall operator wants few
+  // large slides; someone scanning a long hymn wants many small ones.
+  const [thumb, setThumb] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem("vifug:slide-thumb"));
+      return v >= 140 && v <= 420 ? v : 220;
+    } catch {
+      return 220;
+    }
+  });
+  const changeThumb = (v: number) => {
+    setThumb(v);
+    try {
+      localStorage.setItem("vifug:slide-thumb", String(v));
+    } catch {
+      /* private window: the size just is not remembered */
+    }
+  };
+
   return (
     <div className="space-y-5">
+      {slides.length > 0 && (
+        <label className="flex items-center justify-end gap-2 text-[11px] text-[var(--v-text-faint)]">
+          Slide size
+          <input
+            type="range"
+            min={140}
+            max={420}
+            step={20}
+            value={thumb}
+            onChange={(e) => changeThumb(Number(e.target.value))}
+            className="w-32"
+            aria-label="Slide thumbnail size"
+          />
+        </label>
+      )}
       {slidesByItem.map((group) => {
         const sec = song.sections.find((x) => x.id === group.sectionId);
         return (
@@ -2468,7 +2701,7 @@ function SlideGrid({
                 </button>
               </div>
             </div>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3">
+            <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${thumb}px, 1fr))` }}>
               {group.slides.map((slide) => {
                 flatIndex++;
                 const idx = flatIndex;
@@ -2479,7 +2712,7 @@ function SlideGrid({
                     key={slide.slideId ?? idx}
                     onClick={() => stage.preview(idx)}
                     onDoubleClick={() => stage.goLive(idx)}
-                    className={`group relative aspect-video overflow-hidden rounded-xl border-2 bg-black text-left transition-[transform,border-color,box-shadow] duration-150 ease-out ${
+                    className={`group relative flex aspect-video flex-col overflow-hidden rounded-lg border-2 bg-black text-left transition-[transform,border-color,box-shadow] duration-150 ease-out ${
                       isLive
                         ? "v-live-pulse border-[var(--v-live)] ring-2 ring-[var(--v-live)]/40"
                         : isPreview
@@ -2487,24 +2720,28 @@ function SlideGrid({
                           : "border-[var(--v-border)] hover:-translate-y-0.5 hover:border-[var(--v-accent)] hover:shadow-[0_4px_16px_rgba(0,0,0,0.5)]"
                     }`}
                   >
-                    <div className="flex h-full w-full flex-col items-center justify-center p-2 text-center">
+                    {/* The words, sized against the card so a bigger thumbnail
+                        means bigger words rather than more empty black. */}
+                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-2 text-center" style={{ containerType: "size" }}>
                       {slide.sourceLines.map((l, i) => (
-                        <div key={i} className="font-lyric text-[12px] leading-tight text-white/90 line-clamp-2">
+                        <div key={i} className="font-lyric leading-tight text-white/90 line-clamp-2" style={{ fontSize: "clamp(11px, 5.2cqw, 22px)" }}>
                           {l}
                         </div>
                       ))}
                     </div>
-                    {isLive && (
-                      <span className="absolute left-1.5 top-1.5 rounded bg-[var(--v-live)] px-1.5 py-0.5 text-[11px] font-bold uppercase text-white">
-                        Live
-                      </span>
-                    )}
-                    {isPreview && (
-                      <span className="absolute left-1.5 top-1.5 rounded bg-[var(--v-accent)] px-1.5 py-0.5 text-[11px] font-bold uppercase text-black">
-                        Preview
-                      </span>
-                    )}
-                    <span className="absolute bottom-1 right-1.5 text-[11px] text-white/40">{idx + 1}</span>
+                    {/* Label bar, the way ProPresenter draws one: the slide
+                        number and its section, in the section's colour, so a
+                        chorus is findable by colour from across the grid. */}
+                    <div
+                      className={`flex h-6 shrink-0 items-center gap-1.5 px-2 text-[11px] font-semibold ${
+                        isLive ? "bg-[var(--v-live)] text-white" : isPreview ? "bg-[var(--v-accent)] text-black" : chipClass(sec?.type ?? "verse")
+                      }`}
+                    >
+                      <span className="tabular-nums">{idx + 1}</span>
+                      <span className="min-w-0 flex-1 truncate uppercase tracking-wide">{sec?.label ?? ""}</span>
+                      {isLive && <span className="uppercase">Live</span>}
+                      {isPreview && <span className="uppercase">Preview</span>}
+                    </div>
                   </button>
                 );
               })}
@@ -3532,8 +3769,14 @@ function PlansPanel({
       {/* Plan editor */}
       <div className="flex min-w-0 flex-1 flex-col">
         {!selectedId || !plan.data ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-[var(--v-text-faint)]">
-            Select or create a service plan.
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+            <div className="grid h-16 w-16 place-items-center rounded-2xl bg-[var(--v-surface-2)]">
+              <ListChecks className="h-8 w-8 text-[var(--v-text-faint)]" />
+            </div>
+            <div>
+              <p className="font-display text-lg font-semibold">Select a plan</p>
+              <p className="text-sm text-[var(--v-text-faint)]">Pick one on the left, or name a new one and press +.</p>
+            </div>
           </div>
         ) : (
           <>

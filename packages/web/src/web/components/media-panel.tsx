@@ -7,13 +7,15 @@ import { useSessionMedia, useMedia, useUploadMedia, useDeleteMedia, useUpdateMed
 import { UploadError } from "./upload-error";
 import { CapturePicker } from "./capture";
 import { useLiveState } from "../hooks/use-live";
-import { liveBus, type LiveCapture } from "../lib/live-bus";
+import { liveBus, themeToLive, type LiveCapture } from "../lib/live-bus";
 import type { StageSlide } from "../lib/stage";
 import type { LiveBackground } from "../lib/live-bus";
 import { MEDIA_FITS, fitLabel, resolveFit } from "../lib/media-fit";
 import { COLOR_FILTER_PRESETS } from "../lib/color-filters";
 import { useLuts, useUploadLut, useDeleteLut } from "../hooks/use-luts";
 import { useSettings, useUpdateSettings, type AppSettings } from "../hooks/use-settings";
+import { CaptureScenes } from "./capture-scenes";
+import { useThemes } from "../hooks/use-songs";
 import { VButton } from "./bits";
 
 /** Audio has no screen representation, so this mode only offers what a
@@ -175,6 +177,7 @@ export function MediaPanel({
   // straight to the bus so the change shows immediately, mirroring how the
   // Stream panel's video-volume slider updates the projector without a resend.
   const currentCapture = live.capture ?? pendingCapture;
+  const speakerThemes = (useThemes().data ?? []).filter((t) => t.purpose === "speaker");
   const updateCapture = (patch: Partial<NonNullable<LiveCapture>>) => {
     if (!currentCapture) return;
     const updated = { ...currentCapture, ...patch };
@@ -364,6 +367,14 @@ export function MediaPanel({
             </>
           )}
 
+          <CaptureScenes
+            current={currentCapture}
+            onRecall={(c) => {
+              if (live.capture) liveBus().setCapture(c);
+              else onCueCapture(c);
+            }}
+          />
+
           {currentCapture && (
             <div className="w-full max-w-sm space-y-3 rounded-lg border border-[var(--v-border)] bg-[var(--v-surface-2)] p-3 text-left">
               {/* Sound. A camera or capture card can use the room mic, since
@@ -539,7 +550,7 @@ export function MediaPanel({
                           type="button"
                           onClick={() => updateCapture({ pipVideoSide: side })}
                           className={`flex-1 rounded-md border px-2 py-1 text-[12px] ${
-                            (currentCapture.pipVideoSide ?? "left") === side
+                            (currentCapture.pipVideoSide ?? (currentCapture.pipClean && !currentCapture.pipBroadcast ? "right" : "left")) === side
                               ? "border-[var(--v-accent)] bg-[var(--v-accent-soft)] text-[var(--v-accent)]"
                               : "border-[var(--v-border)]"
                           }`}
@@ -559,14 +570,76 @@ export function MediaPanel({
                         className="flex-1"
                       />
                     </label>
-                    <label className="flex items-center gap-2 text-[12px]">
-                      <input
-                        type="checkbox"
-                        checked={!!currentCapture.pipBroadcast}
-                        onChange={(e) => updateCapture({ pipBroadcast: e.target.checked })}
-                      />
-                      Broadcast look (framed video, branded bars)
-                    </label>
+                    <div className="flex gap-1.5">
+                      {([
+                        { id: "split", label: "Split" },
+                        { id: "clean", label: "Clean card" },
+                        { id: "broadcast", label: "Broadcast" },
+                      ] as const).map((st) => {
+                        const cur = currentCapture.pipBroadcast ? "broadcast" : currentCapture.pipClean ? "clean" : "split";
+                        return (
+                          <button
+                            key={st.id}
+                            type="button"
+                            title={
+                              st.id === "clean"
+                                ? "Verse on one side, reference bottom-left, video inset on the other"
+                                : st.id === "broadcast"
+                                  ? "Framed video, branded bars, scripture card"
+                                  : "Video and words split the screen"
+                            }
+                            onClick={() => updateCapture({ pipBroadcast: st.id === "broadcast", pipClean: st.id === "clean" })}
+                            className={`flex-1 rounded-md border px-2 py-1 text-[12px] ${
+                              cur === st.id
+                                ? "border-[var(--v-accent)] bg-[var(--v-accent-soft)] text-[var(--v-accent)]"
+                                : "border-[var(--v-border)]"
+                            }`}
+                          >
+                            {st.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {currentCapture.pipClean && !currentCapture.pipBroadcast && (
+                      <div className="space-y-1.5">
+                        <p className="text-[12px] text-[var(--v-text-faint)]">Bible reference</p>
+                        <div className="flex gap-1.5">
+                          {(["left", "center", "right"] as const).map((a) => (
+                            <button
+                              key={a}
+                              type="button"
+                              onClick={() => updateCapture({ pipRefAlign: a })}
+                              className={`flex-1 rounded-md border px-2 py-1 text-[12px] capitalize ${
+                                (currentCapture.pipRefAlign ?? "left") === a
+                                  ? "border-[var(--v-accent)] bg-[var(--v-accent-soft)] text-[var(--v-accent)]"
+                                  : "border-[var(--v-border)]"
+                              }`}
+                            >
+                              {a}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex gap-1.5">
+                          {(["top", "bottom"] as const).map((v) => (
+                            <button
+                              key={v}
+                              type="button"
+                              onClick={() => updateCapture({ pipRefPos: v })}
+                              className={`flex-1 rounded-md border px-2 py-1 text-[12px] ${
+                                (currentCapture.pipRefPos ?? "bottom") === v
+                                  ? "border-[var(--v-accent)] bg-[var(--v-accent-soft)] text-[var(--v-accent)]"
+                                  : "border-[var(--v-border)]"
+                              }`}
+                            >
+                              {v === "top" ? "Above the verse" : "Below the verse"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {currentCapture.pipClean && !currentCapture.pipBroadcast && (
+                      <input type="text" placeholder="Footer line (e.g. yourchurch.org)" value={currentCapture.pipBottomText ?? ""} onChange={(e) => updateCapture({ pipBottomText: e.target.value })} className="w-full rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-2 py-1.5 text-xs outline-none focus:border-[var(--v-accent)]" />
+                    )}
                     {currentCapture.pipBroadcast && (
                       <>
                         <input type="text" placeholder="Top bar text (e.g. Sunday Service)" value={currentCapture.pipTopText ?? ""} onChange={(e) => updateCapture({ pipTopText: e.target.value })} className="w-full rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-2 py-1.5 text-xs outline-none focus:border-[var(--v-accent)]" />
@@ -707,6 +780,33 @@ export function MediaPanel({
                         </button>
                       ))}
                     </div>
+                    <label className="flex items-center gap-2 text-[11px] text-[var(--v-text-faint)]">
+                      My design
+                      <select
+                        value={currentCapture.nameplate?.themeId ?? ""}
+                        onChange={(e) => {
+                          const row = speakerThemes.find((t) => t.id === e.target.value);
+                          updateCapture({
+                            nameplate: {
+                              ...currentCapture.nameplate!,
+                              themeId: row ? row.id : null,
+                              theme: row ? themeToLive(row as unknown as Record<string, unknown>) : null,
+                            },
+                          });
+                        }}
+                        className="min-w-0 flex-1 rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-2 py-1 text-xs outline-none focus:border-[var(--v-accent)]"
+                      >
+                        <option value="">Use a built-in style above</option>
+                        {speakerThemes.map((t) => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    {speakerThemes.length === 0 && (
+                      <p className="text-[11px] text-[var(--v-text-faint)]">
+                        Design your own in Settings → Theme designer: make a theme and set "For" to Speaker name.
+                      </p>
+                    )}
                     {currentCapture.nameplate?.style === "social" && (
                       <input
                         type="text"

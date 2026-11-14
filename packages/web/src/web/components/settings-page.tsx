@@ -56,7 +56,21 @@ import { MediaPicker } from "./media-picker";
 import { useSetAllVideoSound, useMedia, useUploadMedia } from "../hooks/use-media";
 import { MediaImg } from "./media-el";
 import { StreamSourceCard } from "./stream-source-card";
+import {
+  STREAM_PLATFORMS,
+  STREAM_QUALITIES,
+  destinationUrl,
+  loadStreamConfig,
+  saveStreamConfig,
+  type StreamConfig,
+  STREAM_ENCODERS,
+  type StreamDestination,
+  type StreamEncoder,
+  type StreamPlatform,
+  type StreamQuality,
+} from "../lib/stream-destinations";
 import { ThemeDesigner } from "./theme-designer";
+import { getDesktopAPI } from "../lib/desktop";
 import { usesBrowserSecrets, getDeepgramKey, setDeepgramKey, getPairCode, newPairCode, registerPairCode, fetchRemoteMode, type RemoteMode } from "../lib/browser-secrets";
 import { AddBibleVersion } from "./add-bible-version";
 import { APP_MODES, appModeOf, type AppMode } from "../lib/app-mode";
@@ -68,7 +82,7 @@ import type { LiveState, LiveTheme } from "../lib/live-bus";
 import { themeToLive } from "../lib/live-bus";
 import { MAIN_SCREEN, screenIdFrom, screenUrl } from "../lib/screens";
 import type { useDesktop } from "../hooks/use-desktop";
-import { useCreateTheme, useUpdateTheme, useDeleteTheme, type ThemeDraft, type Theme as ThemeRow } from "../hooks/use-songs";
+import { useCreateTheme, useUpdateTheme, useDeleteTheme, useThemes, themeSuits, type ThemeDraft, type Theme as ThemeRow } from "../hooks/use-songs";
 import { DOWNLOAD_PAGE } from "../hooks/use-update-check";
 import { useNetworkOrigin } from "../hooks/use-network-origin";
 import type { DisplayInfo, FirewallState } from "../lib/desktop";
@@ -97,7 +111,7 @@ export type ProjectorApi = {
 };
 
 export type SectionId =
-  | "lyrics" | "bible" | "presentations" | "streaming" | "ai" | "shortcuts" | "general" | "about";
+  | "lyrics" | "designer" | "bible" | "presentations" | "streaming" | "ai" | "shortcuts" | "general" | "about";
 
 /**
  * Streaming, AI and Shortcuts used to live inside General, which had grown
@@ -106,10 +120,11 @@ export type SectionId =
  */
 const SECTIONS: { id: SectionId; label: string; icon: typeof Music4; hint: string }[] = [
   { id: "lyrics", label: "Lyrics", icon: Music4, hint: "Theme, background & fonts" },
+  { id: "designer", label: "Theme designer", icon: Palette, hint: "Text box, fonts & colours" },
   { id: "bible", label: "Bible", icon: BookOpen, hint: "Versions & scripture look" },
   { id: "presentations", label: "Presentations", icon: MonitorPlay, hint: "Slide look & media defaults" },
-  { id: "streaming", label: "Streaming & output", icon: Radio, hint: "Canvas, NDI, OBS & companion screens" },
-  { id: "ai", label: "AI auto-follow", icon: Ear, hint: "Microphone & speech recognition" },
+  { id: "streaming", label: "Streaming & output", icon: Radio, hint: "NDI, OBS & screens" },
+  { id: "ai", label: "AI auto-follow", icon: Ear, hint: "Mic & speech engine" },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard, hint: "Keys for the live controls" },
   { id: "general", label: "General", icon: Settings2, hint: "Projector & live behavior" },
   { id: "about", label: "About", icon: Info, hint: "What Vifug is & who made it" },
@@ -118,6 +133,7 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof Music4; hint: strin
 /** Heading shown above each section's panels. */
 const SECTION_TITLES: Record<SectionId, string> = {
   lyrics: "Lyrics",
+  designer: "Theme designer",
   bible: "Bible",
   presentations: "Presentations",
   streaming: "Streaming & output",
@@ -238,7 +254,7 @@ export function SettingsPage({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 sm:p-8">
-      <div ref={dialog.ref} {...dialog.dialogProps} aria-label={`Settings - ${SECTION_TITLES[section]}`} className="focus:outline-none flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-[var(--v-border)] bg-[var(--v-surface)] shadow-2xl sm:flex-row">
+      <div ref={dialog.ref} {...dialog.dialogProps} aria-label={`Settings - ${SECTION_TITLES[section]}`} className={`focus:outline-none flex h-full w-full ${section === "designer" ? "max-w-[1400px]" : "max-w-6xl"} flex-col overflow-hidden rounded-2xl border border-[var(--v-border)] bg-[var(--v-surface)] shadow-2xl sm:flex-row`}>
         {/* Section nav: a column beside the panel on a desktop, a scrolling
             strip above it on a phone, where 13rem of fixed side nav left the
             settings themselves about a thumb wide. */}
@@ -294,6 +310,15 @@ export function SettingsPage({
           <div className="v-scroll min-h-0 flex-1 overflow-y-auto p-6">
             {section === "lyrics" && (
               <LyricsSection
+                settings={settings}
+                patchSettings={patchSettings}
+                themes={themes}
+                previewTheme={lyricPreviewTheme}
+                onOpenDesigner={() => setSection("designer")}
+              />
+            )}
+            {section === "designer" && (
+              <DesignerSection
                 settings={settings}
                 patchSettings={patchSettings}
                 themes={themes}
@@ -553,16 +578,12 @@ function ThemeEditor({
   activeId,
   onActivate,
   previewBackground,
-  activeBackgroundId,
-  onPickBackground,
-  mediaDefaults,
+  onOpenDesigner,
 }: {
+  onOpenDesigner: () => void;
   themes: ThemeRow[];
   activeId: string | null;
   onActivate: (id: string) => void;
-  activeBackgroundId?: string | null;
-  onPickBackground?: (id: string | null) => void;
-  mediaDefaults?: { fit?: "cover" | "contain" | "fill"; muted?: boolean };
   /** The picture or colour behind the words on the live screen, so the preview matches it. */
   previewBackground?: LiveTheme["background"];
 }) {
@@ -573,7 +594,6 @@ function ThemeEditor({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [designing, setDesigning] = useState(false);
 
   // Edit whichever theme is on air, so the preview matches the screen.
   const theme = themes.find((t) => t.id === activeId) ?? themes[0];
@@ -607,7 +627,7 @@ function ThemeEditor({
             onChange={(e) => onActivate(e.target.value)}
             className="min-w-[180px] flex-1 rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-sm outline-none focus:border-[var(--v-accent)]"
           >
-            {themes.map((t) => (
+            {themes.filter((t) => t.id === theme.id || themeSuits(t, "lyrics")).map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
               </option>
@@ -699,20 +719,9 @@ function ThemeEditor({
           </p>
         ) : null}
 
-        <VButton variant="primary" size="sm" className="mt-3" onClick={() => setDesigning(true)}>
-          <Palette className="h-4 w-4" /> Open the visual designer
+        <VButton variant="primary" size="sm" className="mt-3" onClick={onOpenDesigner}>
+          <Palette className="h-4 w-4" /> Open the theme designer
         </VButton>
-        {designing && (
-          <ThemeDesigner
-            theme={theme}
-            patch={patch}
-            previewBackground={previewBackground}
-            activeBackgroundId={activeBackgroundId}
-            onPickBackground={onPickBackground}
-            mediaDefaults={mediaDefaults}
-            onClose={() => setDesigning(false)}
-          />
-        )}
 
         <p className="mt-2 text-[12px] text-[var(--v-text-faint)]">
           Editing <b className="text-[var(--v-text-dim)]">{theme.name}</b> - the theme every song
@@ -1348,9 +1357,312 @@ export function ColorField({
   );
 }
 
-/* ---------------- Lyrics ---------------- */
+/* ---------------- What the online audience sees ---------------- */
 
-function LyricsSection({
+/**
+ * In-house full screen, online lower third.
+ *
+ * One switch for the commonest split there is: the room reads words that fill
+ * the screen, while people watching the stream see the speaker with the same
+ * words along the bottom. It changes the built-in stream and the OBS overlay;
+ * the projector and every screen in the building are left alone.
+ */
+function OnlineAudienceGroup({
+  settings,
+  patchSettings,
+}: {
+  settings: AppSettings | undefined;
+  patchSettings: (p: Partial<AppSettings>) => void;
+}) {
+  const online = settings?.online ?? { mode: "same" as const };
+  const themes = useThemes().data ?? [];
+  const [cameras, setCameras] = useState<{ id: string; name: string }[] | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const set = (p: Partial<NonNullable<AppSettings["online"]>>) => patchSettings({ online: { ...online, ...p } });
+  const findCameras = async () => {
+    setCameraError(null);
+    try {
+      const probe = await navigator.mediaDevices.getUserMedia({ video: true });
+      probe.getTracks().forEach((t) => t.stop());
+      const found = (await navigator.mediaDevices.enumerateDevices())
+        .filter((d) => d.kind === "videoinput")
+        .map((d, i) => ({ id: `camera:${d.deviceId}`, name: d.label || `Camera ${i + 1}` }));
+      setCameras(found);
+      if (!found.length) setCameraError("No camera or capture card was found on this computer.");
+    } catch {
+      setCameras([]);
+      setCameraError("The camera could not be opened. Allow camera access and try again.");
+    }
+  };
+  const choice = (mode: "same" | "lower_third", title: string, body: string) => (
+    <button
+      type="button"
+      onClick={() => set({ mode })}
+      className={`flex-1 rounded-lg border p-3 text-left transition-colors ${
+        online.mode === mode
+          ? "border-[var(--v-accent)] bg-[var(--v-accent-soft)]"
+          : "border-[var(--v-border)] bg-[var(--v-surface-3)] hover:border-[var(--v-text-faint)]"
+      }`}
+    >
+      <span className={`block text-sm font-semibold ${online.mode === mode ? "text-[var(--v-accent)]" : ""}`}>{title}</span>
+      <span className="mt-0.5 block text-[12px] text-[var(--v-text-faint)]">{body}</span>
+    </button>
+  );
+  const input = "w-full rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-sm outline-none focus:border-[var(--v-accent)]";
+
+  return (
+    <Group title="What the online audience sees" icon={MonitorPlay}>
+      <p className="mb-2 text-[13px] text-[var(--v-text-dim)]">
+        The room always gets the full display. Choose what goes to people watching the stream.
+      </p>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        {choice("same", "Same as the room", "The stream shows exactly what is on the main screen.")}
+        {choice("lower_third", "Lower third over the camera", "Online viewers see the camera, with the words along the bottom. The room is unchanged.")}
+      </div>
+
+      {online.mode === "lower_third" && (
+        <div className="mt-3 space-y-3">
+          <div>
+            <span className="mb-1 block text-[11px] uppercase tracking-wide text-[var(--v-text-faint)]">Camera behind the words</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1 truncate rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-sm">
+                {online.cameraId ? online.cameraName || "Camera" : "None chosen"}
+              </span>
+              <VButton variant="subtle" size="sm" onClick={() => void findCameras()}>
+                {online.cameraId ? "Change" : "Choose a camera"}
+              </VButton>
+              {online.cameraId && (
+                <VButton variant="subtle" size="sm" onClick={() => set({ cameraId: null, cameraName: null })}>
+                  Remove
+                </VButton>
+              )}
+            </div>
+            {cameras && cameras.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {cameras.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      set({ cameraId: c.id, cameraName: c.name });
+                      setCameras(null);
+                    }}
+                    className="max-w-full truncate rounded-md border border-[var(--v-accent)]/50 px-2.5 py-1 text-[12px] hover:bg-[var(--v-accent-soft)]"
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {cameraError && <p className="mt-1 text-[12px] text-amber-500">{cameraError}</p>}
+            <p className="mt-1 text-[11px] text-[var(--v-text-faint)]">
+              Used by the Go live button. It must be plugged into this computer. With OBS or vMix you add the camera
+              there instead, and the overlay supplies only the words.
+            </p>
+          </div>
+          <label className="block">
+            <span className="mb-1 block text-[11px] uppercase tracking-wide text-[var(--v-text-faint)]">Lower third design</span>
+            <select value={online.themeId ?? ""} onChange={(e) => set({ themeId: e.target.value || null })} className={input}>
+              <option value="">Automatic - the room's font and colours on a dark bar</option>
+              {themes.filter((t) => t.id === online.themeId || t.purpose !== "speaker").map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+            <span className="mt-1 block text-[11px] text-[var(--v-text-faint)]">
+              Or design your own in the Theme designer (start from the Lower third preset) and pick it here.
+            </span>
+          </label>
+          <p className="rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-[12px] text-[var(--v-text-dim)]">
+            Applies to the <b>Go live</b> button (desktop app) and to the <b>OBS / vMix overlay</b>. A theme set for
+            "Stream overlay" under Lyrics → Theme for each screen takes priority on the overlay.
+          </p>
+        </div>
+      )}
+    </Group>
+  );
+}
+
+/* ---------------- Go live (RTMP destinations) ---------------- */
+
+/**
+ * Where the Stream button sends the live output. One row per platform:
+ * the server address is filled in for YouTube, Facebook and Twitch, and
+ * the operator pastes the stream key the platform gives them.
+ */
+function GoLiveGroup({ desktop }: { desktop: ReturnType<typeof useDesktop> }) {
+  const [config, setConfig] = useState<StreamConfig>(loadStreamConfig);
+  const [showKey, setShowKey] = useState<string | null>(null);
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [encoders, setEncoders] = useState<string[]>(["x264"]);
+  useEffect(() => {
+    void getDesktopAPI()
+      ?.streamStatus?.()
+      .then((st) => {
+        setAvailable(st.available);
+        if (st.encoders?.length) setEncoders(st.encoders);
+      })
+      .catch(() => setAvailable(null));
+  }, []);
+  const save = (next: StreamConfig) => {
+    setConfig(next);
+    saveStreamConfig(next);
+  };
+  const patchDest = (id: string, p: Partial<StreamDestination>) =>
+    save({ ...config, destinations: config.destinations.map((d) => (d.id === id ? { ...d, ...p } : d)) });
+  const add = (platform: StreamPlatform) => {
+    const info = STREAM_PLATFORMS.find((x) => x.id === platform)!;
+    save({
+      ...config,
+      destinations: [
+        ...config.destinations,
+        { id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`, platform, name: info.label, server: info.server, key: "", enabled: true },
+      ],
+    });
+  };
+  const canStream = !!getDesktopAPI()?.streamStart;
+  const input = "w-full rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-sm outline-none focus:border-[var(--v-accent)]";
+
+  return (
+    <Group title="Go live to YouTube, Facebook and more" icon={Radio}>
+      <p className="text-[13px] text-[var(--v-text-dim)]">
+        Stream the live output straight from Vifug, to several platforms at once. Add each platform, paste its stream
+        key, then press <b>Go live</b> under the Live picture. The stream is exactly what the room sees.
+      </p>
+      {!canStream && (
+        <p className="mt-2 rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-[13px] text-[var(--v-text-dim)]">
+          {desktop
+            ? "This version of the desktop app cannot stream yet. Update Vifug to turn it on."
+            : "Streaming to platforms needs the desktop app. In a browser, use the OBS overlay below instead."}
+        </p>
+      )}
+      {canStream && available === false && (
+        <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px]">
+          The video encoder (ffmpeg) was not found on this computer. Reinstall Vifug, or install ffmpeg.
+        </p>
+      )}
+
+      <div className="mt-3 space-y-2">
+        {config.destinations.map((d) => {
+          const info = STREAM_PLATFORMS.find((x) => x.id === d.platform) ?? STREAM_PLATFORMS[STREAM_PLATFORMS.length - 1]!;
+          const ready = destinationUrl(d) !== null;
+          return (
+            <div key={d.id} className="rounded-lg border border-[var(--v-border)] bg-[var(--v-surface-2)] p-3">
+              <div className="flex items-center gap-2">
+                <Toggle checked={d.enabled} onChange={(v) => patchDest(d.id, { enabled: v })} />
+                <input
+                  value={d.name}
+                  onChange={(e) => patchDest(d.id, { name: e.target.value })}
+                  aria-label="Destination name"
+                  className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
+                />
+                <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold ${ready ? "bg-[var(--v-ok)]/15 text-[var(--v-ok)]" : "bg-[var(--v-surface-3)] text-[var(--v-text-faint)]"}`}>
+                  {ready ? (d.enabled ? "Ready" : "Off") : "Needs a key"}
+                </span>
+                <button
+                  onClick={() => save({ ...config, destinations: config.destinations.filter((x) => x.id !== d.id) })}
+                  aria-label={`Remove ${d.name}`}
+                  title="Remove"
+                  className="rounded p-1 text-[var(--v-text-faint)] hover:bg-[var(--v-live-soft)] hover:text-[var(--v-live)]"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-[11px] uppercase tracking-wide text-[var(--v-text-faint)]">Server</span>
+                  <input
+                    value={d.server}
+                    onChange={(e) => patchDest(d.id, { server: e.target.value })}
+                    placeholder="rtmp://…"
+                    spellCheck={false}
+                    className={input}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-wide text-[var(--v-text-faint)]">
+                    Stream key
+                    <button type="button" onClick={() => setShowKey(showKey === d.id ? null : d.id)} className="normal-case tracking-normal text-[var(--v-accent)] hover:underline">
+                      {showKey === d.id ? "Hide" : "Show"}
+                    </button>
+                  </span>
+                  <input
+                    type={showKey === d.id ? "text" : "password"}
+                    value={d.key}
+                    onChange={(e) => patchDest(d.id, { key: e.target.value })}
+                    placeholder="Paste the key"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className={input}
+                  />
+                </label>
+              </div>
+              <p className="mt-1.5 text-[11px] text-[var(--v-text-faint)]">Where to find it: {info.keyHelp}.</p>
+            </div>
+          );
+        })}
+        {config.destinations.length === 0 && (
+          <p className="text-[13px] text-[var(--v-text-faint)]">No destinations yet. Add one below.</p>
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="text-[12px] text-[var(--v-text-faint)]">Add:</span>
+        {STREAM_PLATFORMS.map((pf) => (
+          <VButton key={pf.id} variant="subtle" size="sm" onClick={() => add(pf.id)}>
+            <Plus className="h-4 w-4" /> {pf.label}
+          </VButton>
+        ))}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-[var(--v-text-faint)]">Quality</span>
+          <select value={config.quality} onChange={(e) => save({ ...config, quality: e.target.value as StreamQuality })} className={input}>
+            {STREAM_QUALITIES.map((q) => (
+              <option key={q.id} value={q.id}>{q.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-[var(--v-text-faint)]">Encoder</span>
+          <select value={config.encoder} onChange={(e) => save({ ...config, encoder: e.target.value as StreamEncoder })} className={input}>
+            {STREAM_ENCODERS.filter((en) => encoders.includes(en.id) || en.id === config.encoder).map((en) => (
+              <option key={en.id} value={en.id}>{en.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center justify-between gap-3 rounded-md sm:col-span-2 border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2">
+          <span className="min-w-0">
+            <span className="block text-sm">Send the microphone</span>
+            <span className="block text-[11px] text-[var(--v-text-faint)]">The one chosen in AI auto-follow. Off sends silence.</span>
+          </span>
+          <Toggle checked={config.microphone} onChange={(v) => save({ ...config, microphone: v })} />
+        </label>
+      </div>
+      {(STREAM_QUALITIES.find((q) => q.id === config.quality)?.height ?? 0) > 1080 && (
+        <p className="mt-2 rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-[12px] text-[var(--v-text-dim)]">
+          2K, 4K and 8K need a fast computer and a fast upload. Choose a graphics-card encoder if one is listed - it
+          carries high resolutions far more easily than the software one. If the stream stutters, drop one step.
+          Facebook and Twitch accept up to 1080p; YouTube accepts 4K. 8K is for your own server, and is only as sharp
+          as the screen the output is on.
+        </p>
+      )}
+      <p className="mt-2 text-[11px] text-[var(--v-text-faint)]">
+        Stream keys are kept on this computer only - they are not in backups or on a hosted server. Anyone with a key
+        can broadcast to that channel, so do not share them.
+      </p>
+    </Group>
+  );
+}
+
+/* ---------------- Theme designer ---------------- */
+
+/**
+ * The visual designer as a section of its own, beside the others in the side
+ * menu, instead of a dialog opened on top of the Settings dialog. It edits
+ * whichever theme is picked here; "Use for lyrics" puts that theme on screen.
+ */
+function DesignerSection({
   settings,
   patchSettings,
   themes,
@@ -1361,7 +1673,176 @@ function LyricsSection({
   themes: ThemeRow[];
   previewTheme: LiveTheme;
 }) {
+  const update = useUpdateTheme();
+  const create = useCreateTheme();
+  const activeId = settings?.activeThemeId ?? themes[0]?.id ?? null;
+  const [editingId, setEditingId] = useState<string | null>(activeId);
+  const theme = themes.find((t) => t.id === editingId) ?? themes.find((t) => t.id === activeId) ?? themes[0];
+  if (!theme) return <p className="text-sm text-[var(--v-text-faint)]">No themes yet.</p>;
+  const isLyricTheme = theme.id === activeId;
+  const usedBy = [
+    isLyricTheme ? "Lyrics" : null,
+    (settings?.bibleThemeId ?? activeId) === theme.id ? "Bible" : null,
+    (settings?.presentationThemeId ?? activeId) === theme.id ? "Presentations" : null,
+  ].filter(Boolean);
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <label className="flex min-w-[220px] flex-1 items-center gap-2 text-sm sm:flex-none">
+          <span className="shrink-0 text-[var(--v-text-dim)]">Theme</span>
+          <select
+            value={theme.id}
+            onChange={(e) => setEditingId(e.target.value)}
+            className="min-w-0 flex-1 rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-sm outline-none focus:border-[var(--v-accent)] sm:w-64"
+          >
+            {themes.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+                {t.purpose === "scripture" ? " (Scripture)" : t.purpose === "lyrics" ? " (Lyrics)" : t.purpose === "speaker" ? " (Speaker name)" : t.purpose === "presentation" ? " (Presentations)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="shrink-0 text-[var(--v-text-dim)]">For</span>
+          <select
+            value={theme.purpose ?? ""}
+            title="What this theme is designed for. It decides which theme lists offer it."
+            onChange={(e) => {
+              const purpose = e.target.value || null;
+              // A theme with no text box yet, turned into a speaker's name bar,
+              // starts as one: bottom-left, left-aligned, on a bar. Anything
+              // already designed is left exactly as it is.
+              const starter =
+                purpose === "speaker" && !theme.textFrame && !theme.textBar
+                  ? {
+                      textFrame: JSON.stringify({ x: 5, y: 74, w: 46, h: 18 }),
+                      textAlign: "left",
+                      textBar: JSON.stringify({ color: "#1d4ed8", radius: 15 }),
+                      transition: "slide-right",
+                      transitionMs: 500,
+                    }
+                  : {};
+              update.mutate({ id: theme.id, patch: { purpose, ...starter } });
+            }}
+            className="rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-sm outline-none focus:border-[var(--v-accent)]"
+          >
+            <option value="">Everything</option>
+            <option value="lyrics">Lyrics only</option>
+            <option value="scripture">Scripture only</option>
+            <option value="presentation">Presentations only</option>
+            <option value="speaker">Speaker name (lower third)</option>
+          </select>
+        </label>
+        <VButton
+          variant="subtle"
+          size="sm"
+          title="Start a new theme from the app defaults"
+          onClick={() => create.mutate({ name: "New theme" }, { onSuccess: (r) => setEditingId(r.id) })}
+        >
+          <Plus className="h-4 w-4" /> New
+        </VButton>
+        {(!theme.purpose || theme.purpose === "presentation") &&
+          settings?.presentationThemeId !== theme.id &&
+          !(isLyricTheme && !settings?.presentationThemeId) && (
+            <VButton
+              variant="subtle"
+              size="sm"
+              title="Use this theme whenever a presentation slide is on screen"
+              onClick={() => patchSettings({ presentationThemeId: theme.id, presentationBackgroundId: undefined })}
+            >
+              <Check className="h-4 w-4" /> Use for presentations
+            </VButton>
+          )}
+        {(!theme.purpose || theme.purpose === "scripture") && settings?.bibleThemeId !== theme.id && !(isLyricTheme && !settings?.bibleThemeId) && (
+          <VButton
+            variant="subtle"
+            size="sm"
+            title="Use this theme whenever Scripture is on screen"
+            onClick={() => patchSettings({ bibleThemeId: theme.id, bibleBackgroundId: undefined })}
+          >
+            <Check className="h-4 w-4" /> Use for Scripture
+          </VButton>
+        )}
+        {theme.purpose === "speaker" && (
+          <span className="text-[12px] text-[var(--v-text-faint)]">
+            Use it from Media → Capture → Preacher nameplate → My design.
+          </span>
+        )}
+        {!isLyricTheme && (!theme.purpose || theme.purpose === "lyrics") && (
+          <VButton
+            variant="subtle"
+            size="sm"
+            title="Put this theme on the lyric screen"
+            onClick={() => patchSettings({ activeThemeId: theme.id })}
+          >
+            <Check className="h-4 w-4" /> Use for lyrics
+          </VButton>
+        )}
+        <span className="ml-auto text-[12px] text-[var(--v-text-faint)]">
+          {usedBy.length ? `Used by ${usedBy.join(", ")}` : "Not on any screen yet"} · saved as you go
+        </span>
+      </div>
+      <ThemeDesigner
+        embedded
+        theme={theme}
+        patch={(p) => update.mutate({ id: theme.id, patch: p })}
+        previewBackground={isLyricTheme ? previewTheme.background : undefined}
+        activeBackgroundId={isLyricTheme ? (settings?.activeBackgroundId ?? null) : (theme.backgroundId ?? null)}
+        mediaDefaults={{ fit: settings?.mediaDefaults?.fit ?? "cover", muted: !(settings?.mediaDefaults?.videoSound ?? true) }}
+        // Only the lyric theme's picture goes straight on screen; another
+        // theme just remembers its own.
+        onPickBackground={
+          isLyricTheme
+            ? (id) => patchSettings({ activeBackgroundId: id, bibleBackgroundId: undefined, presentationBackgroundId: undefined })
+            : undefined
+        }
+      />
+    </div>
+  );
+}
+
+/* ---------------- Lyrics ---------------- */
+
+function LyricsSection({
+  settings,
+  patchSettings,
+  themes,
+  previewTheme,
+  onOpenDesigner,
+}: {
+  settings: AppSettings | undefined;
+  patchSettings: (p: Partial<AppSettings>) => void;
+  themes: ThemeRow[];
+  previewTheme: LiveTheme;
+  onOpenDesigner: () => void;
+}) {
   const linesPerSlide = settings?.linesPerSlide ?? 2;
+  const activateTheme = (id: string) => {
+    // A theme that ships with a picture (Violet Haze, Blue Halftone ...)
+    // brings it along - choosing the look and then also having to find
+    // its picture in the Background list would be two steps for one
+    // idea. A theme with no picture leaves the background as it was, as
+    // before. Either way the Background list below still changes it.
+    //
+    // The theme is for lyrics, Scripture and presentations alike. The
+    // Bible and presentation backgrounds are "unset = share the lyric
+    // background" until somebody picks one of their own, so clearing them
+    // here (undefined drops the key) puts both back on the shared picture
+    // - including one an earlier choice had pinned to something else.
+    const bg = themes.find((t) => t.id === id)?.backgroundId;
+    patchSettings(
+      bg
+        ? {
+            activeThemeId: id,
+            activeBackgroundId: bg,
+            bibleBackgroundId: undefined,
+            presentationBackgroundId: undefined,
+          }
+        : { activeThemeId: id },
+    );
+  };
   return (
     <div>
       {/* The theme editor brings its own preview - it previews the theme row
@@ -1370,38 +1851,108 @@ function LyricsSection({
         themes={themes}
         activeId={settings?.activeThemeId ?? null}
         previewBackground={previewTheme.background}
-        activeBackgroundId={settings?.activeBackgroundId ?? null}
-        mediaDefaults={{ fit: settings?.mediaDefaults?.fit ?? "cover", muted: !(settings?.mediaDefaults?.videoSound ?? true) }}
-        // A picture chosen while designing is the theme's picture, so it goes on
-        // the screen the same way choosing the theme would put it there.
-        onPickBackground={(id) =>
-          patchSettings({ activeBackgroundId: id, bibleBackgroundId: undefined, presentationBackgroundId: undefined })
-        }
-        onActivate={(id) => {
-          // A theme that ships with a picture (Violet Haze, Blue Halftone ...)
-          // brings it along - choosing the look and then also having to find
-          // its picture in the Background list would be two steps for one
-          // idea. A theme with no picture leaves the background as it was, as
-          // before. Either way the Background list below still changes it.
-          //
-          // The theme is for lyrics, Scripture and presentations alike. The
-          // Bible and presentation backgrounds are "unset = share the lyric
-          // background" until somebody picks one of their own, so clearing them
-          // here (undefined drops the key) puts both back on the shared picture
-          // - including one an earlier choice had pinned to something else.
-          const bg = themes.find((t) => t.id === id)?.backgroundId;
-          patchSettings(
-            bg
-              ? {
-                  activeThemeId: id,
-                  activeBackgroundId: bg,
-                  bibleBackgroundId: undefined,
-                  presentationBackgroundId: undefined,
-                }
-              : { activeThemeId: id },
-          );
-        }}
+        onActivate={activateTheme}
+        onOpenDesigner={onOpenDesigner}
       />
+
+      <Group title="Theme for each screen" icon={Palette}>
+        <p className="mb-2 text-[11px] text-[var(--v-text-faint)]">
+          One theme can dress lyrics, Bible and presentations alike, or each can have its own. Bible and presentations
+          follow the lyric theme until you pick one for them.
+        </p>
+        {(
+          [
+            { label: "Lyrics", value: settings?.activeThemeId ?? themes[0]?.id ?? "", own: false },
+            { label: "Bible", value: settings?.bibleThemeId ?? "", own: true },
+            { label: "Presentations", value: settings?.presentationThemeId ?? "", own: true },
+          ] as const
+        ).map((row) => (
+          <label key={row.label} className="mb-1.5 flex items-center gap-2 text-sm">
+            <span className="w-28 shrink-0 text-[var(--v-text-dim)]">{row.label}</span>
+            <select
+              value={row.value}
+              onChange={(e) => {
+                const id = e.target.value || null;
+                if (row.label === "Lyrics") {
+                  if (id) activateTheme(id);
+                  return;
+                }
+                // Picking a theme for one screen type drops any background
+                // pinned to it, so the theme's own picture (if it has one)
+                // shows rather than an earlier choice.
+                if (row.label === "Bible") patchSettings({ bibleThemeId: id ?? undefined, bibleBackgroundId: undefined });
+                else patchSettings({ presentationThemeId: id ?? undefined, presentationBackgroundId: undefined });
+              }}
+              className="min-w-0 flex-1 rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-sm outline-none focus:border-[var(--v-accent)]"
+            >
+              {row.own && <option value="">Same as lyrics</option>}
+              {themes
+                // Lyrics and Bible offer the themes made for them (and the one
+                // already chosen, whatever it is, so it never vanishes).
+                .filter(
+                  (t) =>
+                    t.id === row.value ||
+                    themeSuits(t, row.label === "Bible" ? "scripture" : row.label === "Presentations" ? "presentation" : "lyrics"),
+                )
+                .map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+        <p className="mb-2 mt-3 text-[11px] text-[var(--v-text-faint)]">
+          Each audience can see its own look. The stream overlay and every extra screen show what you send unless you
+          give them a theme here - a lower third for viewers at home, plain large type for the stage, your brand
+          colours in the lobby.
+        </p>
+        {[
+          { key: "stream", label: "Stream overlay", value: settings?.streamThemeId ?? "" },
+          ...(settings?.screens ?? []).map((sc) => ({ key: sc.id, label: sc.name, value: sc.themeId ?? "" })),
+        ].map((row) => (
+          <label key={row.key} className="mb-1.5 flex items-center gap-2 text-sm">
+            <span className="w-28 shrink-0 truncate text-[var(--v-text-dim)]" title={row.label}>{row.label}</span>
+            <select
+              value={row.value}
+              onChange={(e) => {
+                const id = e.target.value || null;
+                if (row.key === "stream") patchSettings({ streamThemeId: id ?? undefined });
+                else
+                  patchSettings({
+                    screens: (settings?.screens ?? []).map((sc) => (sc.id === row.key ? { ...sc, themeId: id } : sc)),
+                  });
+              }}
+              className="min-w-0 flex-1 rounded-md border border-[var(--v-border)] bg-[var(--v-surface-3)] px-3 py-2 text-sm outline-none focus:border-[var(--v-accent)]"
+            >
+              <option value="">Same as what is sent</option>
+              {themes.filter((t) => t.id === row.value || t.purpose !== "speaker").map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+        {(settings?.screens ?? []).length === 0 && (
+          <p className="mb-2 text-[11px] text-[var(--v-text-faint)]">
+            Add more screens (stage, lobby, overflow) under Streaming &amp; output, and each gets a row here.
+          </p>
+        )}
+        <VButton
+          variant="subtle"
+          size="sm"
+          className="mt-1"
+          disabled={!settings?.bibleThemeId && !settings?.presentationThemeId}
+          title="Make Bible and presentations use the lyric theme again"
+          onClick={() =>
+            patchSettings({
+              bibleThemeId: undefined,
+              presentationThemeId: undefined,
+              bibleBackgroundId: undefined,
+              presentationBackgroundId: undefined,
+            })
+          }
+        >
+          Use the lyric theme for everything
+        </VButton>
+      </Group>
 
       <Group title="Look & feel" icon={Type}>
         <OverrideEditor
@@ -2557,6 +3108,8 @@ function StreamingSection({
 
   return (
     <div>
+      <GoLiveGroup desktop={desktop} />
+      <OnlineAudienceGroup settings={settings} patchSettings={patchSettings} />
       <Group title="Stream canvas" icon={MonitorPlay}>
         <label className="flex items-center justify-between gap-3">
           <span className="min-w-0">
