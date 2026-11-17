@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
   Film,
   Palette,
+  Upload,
   Link2,
   Monitor,
   MonitorX,
@@ -2559,8 +2560,41 @@ function SoundOutputGroup({
  * directory, nothing packed.
  */
 function BackupGroup({ desktop }: { desktop: NonNullable<ReturnType<typeof useDesktop>> }) {
-  const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
+  const [busy, setBusy] = useState<"backup" | "restore" | "import" | null>(null);
   const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const qc = useQueryClient();
+
+  const runImport = async () => {
+    setBusy("import");
+    setNote(null);
+    try {
+      const res = await desktop.libraryImport?.();
+      if (!res) setNote({ kind: "err", text: "This build can't do that yet - update the app." });
+      else if (res.canceled) setNote(null);
+      else if (res.ok && res.result) {
+        const r = res.result;
+        const part = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : null);
+        const added = [
+          part(r.songs.added, "song", "songs"),
+          part(r.presentations.added, "presentation", "presentations"),
+          part(r.media.added, "media item", "media items"),
+          part(r.themes.added, "theme", "themes"),
+          part(r.fonts.added, "font", "fonts"),
+        ].filter(Boolean);
+        const here = r.songs.skipped + r.presentations.skipped + r.media.skipped + r.themes.skipped + r.fonts.skipped;
+        setNote({
+          kind: "ok",
+          text:
+            (added.length ? `Added ${added.join(", ")}.` : "Nothing new to add - everything in that library is already here.") +
+            (added.length && here ? ` ${here} ${here === 1 ? "item was" : "items were"} already here and left as they were.` : ""),
+        });
+        // Show the new songs, media and themes without a restart.
+        void qc.invalidateQueries();
+      } else setNote({ kind: "err", text: res.error ?? "That didn't work." });
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const run = async (which: "backup" | "restore") => {
     setBusy(which);
@@ -2590,7 +2624,13 @@ function BackupGroup({ desktop }: { desktop: NonNullable<ReturnType<typeof useDe
         Copies every song, deck and setting, plus your media files, into a dated folder - put it on
         a USB stick or a synced drive. Restoring replaces the current library with the backup's.
       </p>
-      <div className="flex gap-2">
+      <p className="mb-3 text-[12px] text-[var(--v-text-faint)]">
+        To move songs and media to another computer: <b className="text-[var(--v-text-dim)]">Back up now</b> on the
+        first one, carry the folder across, and <b className="text-[var(--v-text-dim)]">Import from another Vifug</b>{" "}
+        on the second. Import adds what is missing - songs, presentations, media, themes and fonts - and replaces
+        nothing that is already there.
+      </p>
+      <div className="flex flex-wrap gap-2">
         <VButton variant="subtle" onClick={() => run("backup")} disabled={busy !== null}>
           {busy === "backup" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
           Back up now
@@ -2598,6 +2638,10 @@ function BackupGroup({ desktop }: { desktop: NonNullable<ReturnType<typeof useDe
         <VButton variant="ghost" onClick={() => run("restore")} disabled={busy !== null}>
           {busy === "restore" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Restore from backup…
+        </VButton>
+        <VButton variant="subtle" onClick={() => void runImport()} disabled={busy !== null}>
+          {busy === "import" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+          Import from another Vifug…
         </VButton>
       </div>
       {note && (
@@ -3922,6 +3966,50 @@ function AboutSection({ desktop }: { desktop: ReturnType<typeof useDesktop> }) {
           back up with Explorer or Finder. Nothing is uploaded and there is no telemetry. If you enable
           AI auto-follow, audio from the selected microphone is sent to the speech service you have
           configured for as long as it is listening, and only then.
+        </p>
+      </Group>
+
+      {/* Support. The same six ways the website offers, so someone who wants
+          to help does not have to go looking for the page that says how. */}
+      <Group title="Support Vifug" icon={Heart}>
+        <p className="text-[14px] leading-relaxed text-[var(--v-text-dim)]">
+          Vifug is free, and it stays free because people who use it help keep it going. If it has saved your team
+          time, any of these makes a difference:
+        </p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {[
+            ["Give once", "A gift of any size keeps development going and the app free for every church."],
+            ["Give monthly", "Regular support lets us plan ahead."],
+            ["Sponsor as a church or business", "Put your name behind a feature, or fund one your church has asked for."],
+            ["Give your time or skills", "Translate Vifug, test new builds, add songs or Bible versions in your language."],
+            ["Spread the word", "A message from one media team to another carries further than any advert."],
+            ["Something else", "Equipment to test on, a venue to try Vifug in, a partnership - tell us."],
+          ].map(([title, body]) => (
+            <div key={title} className="rounded-lg border border-[var(--v-border)] bg-[var(--v-surface-3)] p-3">
+              <p className="text-[13px] font-semibold">{title}</p>
+              <p className="mt-0.5 text-[12px] text-[var(--v-text-faint)]">{body}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <a
+            href="https://vifug.com/#support"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-gradient-to-b from-[var(--v-accent)] to-[var(--v-accent-2)] px-3.5 text-sm font-semibold text-black"
+          >
+            <Heart className="h-4 w-4" /> Support Vifug
+          </a>
+          <a
+            href="mailto:contact@vifug.com?subject=Supporting%20Vifug"
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--v-border)] px-3.5 text-sm hover:bg-[var(--v-surface-3)]"
+          >
+            <Mail className="h-4 w-4" /> contact@vifug.com
+          </a>
+        </div>
+        <p className="mt-2 text-[12px] text-[var(--v-text-faint)]">
+          The button opens the support form on vifug.com, where you choose how you would like to help and we get back
+          to you. Nothing is charged from inside the app.
         </p>
       </Group>
 
