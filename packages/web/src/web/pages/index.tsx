@@ -62,6 +62,7 @@ import {
 } from "../hooks/use-playlists";
 import { useBibleManifest, parseReference, searchVersion, versionAbbr, type SearchHit } from "../hooks/use-bible";
 import { useServerNow } from "../hooks/use-server-clock";
+import { usePhoneMic } from "../hooks/use-phone-mic";
 import {
   DEFAULT_TIMER, formatTimer, timerMs, timerPhase,
   startedTimer, resumedTimer, pausedTimer, resetTimer,
@@ -931,9 +932,23 @@ export default function OperatorPage() {
    * panel, because that string is already the authority on it everywhere
    * else in this file - the live history reads it the same way.
    */
+  /*
+   * The version the Bible panel opens on when nobody has chosen one: the first
+   * English version, or the first enabled one - the same pick the panel makes.
+   * Without it the quotation index below was only ever built after the Bible
+   * tab had been opened once, because the panel was the only thing that knew
+   * a version. An operator who starts on Lyrics, with a song up, never opened
+   * it, so a quoted or paraphrased verse was never recognised from any other
+   * tab. A reference read out still worked, which hid the problem.
+   */
+  const defaultBibleVersionId = useMemo(() => {
+    const langs = (settings?.bibleLangs ?? {}) as Record<string, boolean>;
+    const v = (bibleManifest.data?.versions ?? []).find((x) => x.lang === "en" || langs[x.id] !== false);
+    return v?.id ?? null;
+  }, [settings?.bibleLangs, bibleManifest.data]);
   const bibleVersionId = useMemo(
-    () => bibleSlides[0]?.slideId?.split("-")[0] ?? null,
-    [bibleSlides],
+    () => bibleSlides[0]?.slideId?.split("-")[0] ?? defaultBibleVersionId,
+    [bibleSlides, defaultBibleVersionId],
   );
 
   /** Versions installed AND switched on, so naming a disabled one does nothing. */
@@ -982,7 +997,14 @@ export default function OperatorPage() {
     [verseCorpus.corpusRef, semanticReady, semanticQuery],
   );
 
+  // A phone as the room microphone. Read here, once, because both the listener
+  // below and the Settings panel need the same connection - a second one would
+  // make the phone send everything twice.
+  const phoneMic = usePhoneMic(settings?.autoFollowPhoneMicRoom, settings?.autoFollowPhoneMic ?? false);
+
   const autoFollow = useAutoFollow({
+    usePhoneMic: settings?.autoFollowPhoneMic ?? false,
+    phoneStream: phoneMic.stream,
     slides: stage.slides,
     currentIndex: stage.liveIndex,
     onAdvanceTo: (i) => stage.goLive(i),
@@ -1030,6 +1052,8 @@ export default function OperatorPage() {
     settings?.autoFollowModelHost ?? "",
     settings?.autoFollowAccentedEnglish ? "1" : "0",
     settings?.autoFollowLang ?? "",
+    // The phone's audio arriving, dropping or coming back restarts listening on the new track.
+    settings?.autoFollowPhoneMic ? `phone:${phoneMic.trackKey}` : "",
   ].join("|");
   useEffect(() => {
     // stop() first: start() on a running session would open a second one.
@@ -1811,6 +1835,7 @@ export default function OperatorPage() {
             heard={autoFollow.heard}
             events={autoFollow.events}
             live={ctrl.status === "live"}
+            phoneWaiting={(settings?.autoFollowPhoneMic ?? false) && !phoneMic.connected}
             onToggle={(v) => patchSettings({ autoFollow: v })}
             // No Bible outside church: the saved switches are left alone (so going
             // back to Church finds them as they were) but nothing here acts on or
@@ -1890,6 +1915,7 @@ export default function OperatorPage() {
           autoFollowProgress={autoFollow.modelProgress}
           autoFollowError={autoFollow.errorText}
           autoFollowDevice={autoFollow.localDevice}
+          phoneMic={{ status: phoneMic.status, connected: phoneMic.connected }}
           initialSection={settingsSection}
           projector={projector}
           stageNotes={stageNotes}
@@ -2873,6 +2899,7 @@ function AutoFollowPanel({
   heard,
   events,
   live,
+  phoneWaiting = false,
   onToggle,
   scriptureOn,
   quotesOn,
@@ -2887,6 +2914,8 @@ function AutoFollowPanel({
   heard: string;
   events: FollowEvent[];
   live: boolean;
+  /** The phone is the microphone and has not connected yet. */
+  phoneWaiting?: boolean;
   onToggle: (v: boolean) => void;
   /** Following spoken Scripture is on - otherwise there is nothing to place. */
   scriptureOn: boolean;
@@ -2902,7 +2931,9 @@ function AutoFollowPanel({
     status === "listening"
       ? "Listening…"
       : status === "connecting"
-        ? "Connecting…"
+        ? phoneWaiting
+          ? "Waiting for the phone's microphone…"
+          : "Connecting…"
         : status === "unavailable"
           ? "No speech key set"
           : status === "error"
