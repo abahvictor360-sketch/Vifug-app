@@ -52,6 +52,7 @@ import { OUTPUT_CANVASES, DEFAULT_OUTPUT_CANVAS } from "../lib/output-canvas";
 import { VButton } from "./bits";
 import { FontPicker } from "./font-picker";
 import { SlideRender } from "./slide-render";
+import { PhoneMicCard } from "./phone-mic-card";
 import { hexToRgba } from "./announcement-ticker";
 import { MediaPicker } from "./media-picker";
 import { useSetAllVideoSound, useMedia, useUploadMedia } from "../hooks/use-media";
@@ -200,6 +201,7 @@ export function SettingsPage({
   autoFollowProgress = null,
   autoFollowError = null,
   autoFollowDevice = null,
+  phoneMic,
   initialSection,
   projector,
   stageNotes,
@@ -225,6 +227,8 @@ export function SettingsPage({
   autoFollowError?: string | null;
   /** Which backend the local engine is running on, once it has loaded. */
   autoFollowDevice?: string | null;
+  /** The phone-as-microphone connection, owned by the operator page. */
+  phoneMic?: { status: string; connected: boolean };
   /** Which entry to land on. Help > About Vifug opens straight to "about". */
   initialSection?: SectionId;
   /**
@@ -350,6 +354,7 @@ export function SettingsPage({
                 autoFollowProgress={autoFollowProgress}
                 autoFollowError={autoFollowError}
                 autoFollowDevice={autoFollowDevice}
+                phoneMic={phoneMic}
               />
             )}
             {section === "shortcuts" && (
@@ -2875,6 +2880,7 @@ function AiSection({
   autoFollowProgress,
   autoFollowError,
   autoFollowDevice,
+  phoneMic,
 }: {
   settings: AppSettings | undefined;
   patchSettings: (p: Partial<AppSettings>) => void;
@@ -2883,6 +2889,7 @@ function AiSection({
   autoFollowProgress: number | null;
   autoFollowError: string | null;
   autoFollowDevice: string | null;
+  phoneMic?: { status: string; connected: boolean };
 }) {
   return (
     <div>
@@ -2929,6 +2936,8 @@ function AiSection({
               })
             }
           />
+
+          <PhoneMicCard settings={settings} patchSettings={patchSettings} connection={phoneMic} />
 
           <label className="mt-3 flex items-center justify-between">
             <span className="text-sm">Mute the microphone</span>
@@ -4078,7 +4087,11 @@ function AutoFollowStatus({
     status === "listening"
       ? "Listening to the room…"
       : status === "connecting"
-        ? "Connecting to speech service…"
+        // The one case where connecting waits on a person: auto-follow is
+        // ready and is waiting for the phone to be opened.
+        ? error
+          ? "Waiting for the phone's microphone…"
+          : "Connecting to speech service…"
         : status === "unavailable"
           ? "No Deepgram key set"
           : status === "error"
@@ -4106,7 +4119,7 @@ function AutoFollowStatus({
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
         {label}
       </p>
-      {status === "error" && error && (
+      {(status === "error" || status === "connecting") && error && (
         <p className="mt-1.5 text-[12px] text-amber-500">{error}</p>
       )}
       {status === "listening" && heard && (
